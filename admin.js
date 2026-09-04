@@ -165,7 +165,11 @@ async function saveProduction() {
   const date = document.getElementById('entryDate').value;
   const slot = document.getElementById('entrySlot').value;
   const type = currentEntrySlotType();
-  const rows = [...document.querySelectorAll('.entry-row')];
+  // Scoped to #entryRows specifically — NOT a page-wide '.entry-row' query.
+  // The downtime-reason widget below also uses the '.entry-row' CSS class
+  // (just for the same grid layout), so an unscoped query here would also
+  // match that row and crash on .querySelector('.e-worker') returning null.
+  const rows = [...document.querySelectorAll('#entryRows .entry-row')];
   const entries = rows.map(r => ({
     date, slot, type,
     worker: r.querySelector('.e-worker').value,
