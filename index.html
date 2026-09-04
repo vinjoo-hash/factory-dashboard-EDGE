@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>لوحة متابعة الإنتاج</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+
+<header class="app-header">
+  <div class="brand-row">
+    <div class="brand"><span class="dot" id="statusDot"></span> لوحة متابعة الإنتاج</div>
+    <span class="status-pill working" id="statusPill">جاري التحميل...</span>
+  </div>
+  <div class="status-line">
+    <span>📅 <b id="todayDate">--</b></span>
+    <span>🕐 <b id="nowTime">--</b></span>
+    <span>آخر تحديث: <b id="lastUpdate">--</b></span>
+  </div>
+  <div id="staleWarning" class="stale-warning" style="display:none">⚠ لم يتم تحديث بيانات الإنتاج منذ فترة طويلة</div>
+
+  <div class="tabs main-tabs">
+    <button class="tab-btn active" data-maintab="executive" onclick="switchMainTab('executive')">تنفيذي</button>
+    <button class="tab-btn" data-maintab="live" onclick="switchMainTab('live')">مباشر</button>
+    <button class="tab-btn" data-maintab="daily" onclick="switchMainTab('daily')">يومي</button>
+    <button class="tab-btn" data-maintab="weekly" onclick="switchMainTab('weekly')">أسبوعي</button>
+    <button class="tab-btn" data-maintab="monthly" onclick="switchMainTab('monthly')">شهري</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- ============================= EXECUTIVE TAB ============================= -->
+  <div id="maintab-executive" class="maintab-panel">
+
+    <div class="section-title"><span class="bar"></span> نظرة سريعة (30 ثانية)</div>
+    <div class="kpi-grid" id="executiveKpiGrid"></div>
+
+    <div class="section-title"><span class="bar"></span> أبرز ما يحتاج انتباهك</div>
+    <div class="line-grid" id="executiveHighlights"></div>
+
+    <div class="section-title"><span class="bar"></span> توقع نهاية اليوم</div>
+    <div class="card" id="executiveForecast"></div>
+
+    <div class="section-title"><span class="bar"></span> تنبيهات حرجة</div>
+    <div class="alerts" id="executiveAlerts"></div>
+
+    <div class="footer-note">هذه لوحة ملخّص فقط — للتفاصيل الكاملة استخدم تبويب "مباشر"</div>
+  </div>
+
+  <!-- ============================= LIVE TAB ============================= -->
+  <div id="maintab-live" class="maintab-panel" style="display:none;">
+
+    <div class="section-title"><span class="bar"></span> المؤشرات الرئيسية</div>
+    <div class="kpi-grid" id="kpiGrid"></div>
+
+    <div class="card" id="factoryStatusCard" style="margin-top:14px;"></div>
+
+    <div id="alertsSection">
+      <div class="section-title"><span class="bar"></span> تنبيهات</div>
+      <div class="alerts" id="alertsList"></div>
+    </div>
+
+    <div class="section-title"><span class="bar"></span> أداء كل خط إنتاج</div>
+    <div class="line-grid" id="lineGrid"></div>
+
+    <div class="section-title ot"><span class="bar"></span> متابعة الأوفر تايم</div>
+    <div id="overtimeSection"></div>
+
+    <div class="section-title"><span class="bar"></span> إنتاج الساعات / الفترات</div>
+    <div class="table-wrap">
+      <table id="slotTable">
+        <thead><tr id="slotTableHeadRow">
+          <th>الفترة</th><th>الوقت</th><th>الحالة</th><th>متوقع</th>
+          <th>الإجمالي</th><th>الفارق</th>
+        </tr></thead>
+        <tbody id="slotTableBody"></tbody>
+      </table>
+    </div>
+
+    <div class="section-title"><span class="bar"></span> الإنتاج التراكمي: الفعلي مقابل المتوقع</div>
+    <div class="chart-card"><canvas id="cumulativeChart" height="220"></canvas></div>
+
+    <div class="section-title"><span class="bar"></span> الهدف مقابل الفعلي لكل خط</div>
+    <div class="chart-card"><canvas id="lineCompareChart" height="200"></canvas></div>
+
+    <div class="section-title"><span class="bar"></span> الإنتاج لكل فترة</div>
+    <div class="chart-card"><canvas id="hourlyChart" height="200"></canvas></div>
+
+    <div class="section-title"><span class="bar"></span> أداء العمال</div>
+    <div class="card" id="workerPerformance" style="padding:0;"></div>
+
+    <div class="footer-note">يتم تحديث اللوحة تلقائيًا كل 45 ثانية — للعرض فقط</div>
+  </div>
+
+  <!-- ============================= DAILY TAB ============================= -->
+  <div id="maintab-daily" class="maintab-panel" style="display:none;">
+
+    <div class="card">
+      <div class="field">
+        <label>اختر يوم</label>
+        <input type="date" id="dailyDate">
+      </div>
+    </div>
+
+    <div id="dailyEmptyState" class="empty-state" style="display:none;">لا توجد بيانات لهذا اليوم</div>
+
+    <div id="dailyContent" style="display:none;">
+      <div class="section-title"><span class="bar"></span> ملخص اليوم</div>
+      <div class="kpi-grid" id="dailyKpiGrid"></div>
+
+      <div class="section-title"><span class="bar"></span> أداء كل خط إنتاج</div>
+      <div class="line-grid" id="dailyLineGrid"></div>
+
+      <div class="section-title"><span class="bar"></span> إنتاج الفترات لهذا اليوم</div>
+      <div class="table-wrap">
+        <table id="dailySlotTable">
+          <thead><tr id="dailySlotTableHeadRow"><th>الفترة</th><th>الوقت</th><th>النوع</th><th>الإجمالي</th></tr></thead>
+          <tbody id="dailySlotTableBody"></tbody>
+        </table>
+      </div>
+
+      <div class="section-title"><span class="bar"></span> الهدف مقابل الفعلي لكل خط</div>
+      <div class="chart-card"><canvas id="dailyLineChart" height="200"></canvas></div>
+
+      <div class="section-title"><span class="bar"></span> أداء العمال في هذا اليوم</div>
+      <div class="card" id="dailyWorkerPerformance" style="padding:0;"></div>
+    </div>
+  </div>
+
+  <!-- ============================= WEEKLY TAB ============================= -->
+  <div id="maintab-weekly" class="maintab-panel" style="display:none;">
+
+    <div class="card">
+      <div class="top-bar-admin">
+        <button class="btn-secondary" onclick="shiftWeek(-1)">◀ الأسبوع السابق</button>
+        <span class="slot-pill" id="weeklyRangeLabel">--</span>
+        <button class="btn-secondary" onclick="shiftWeek(1)">الأسبوع التالي ▶</button>
+      </div>
+      <div style="margin-top:10px;"><button class="btn-primary" onclick="goToCurrentWeek()">الأسبوع الحالي</button></div>
+    </div>
+
+    <div class="section-title"><span class="bar"></span> التقرير الأسبوعي</div>
+    <div class="kpi-grid" id="weeklyKpiGrid"></div>
+
+    <div class="card" id="weeklyComparisonCard" style="margin-top:14px;"></div>
+
+    <div class="section-title"><span class="bar"></span> اتجاه الإنتاج الأسبوعي</div>
+    <div class="chart-card"><canvas id="weeklyTrendChart" height="220"></canvas></div>
+
+    <div class="section-title"><span class="bar"></span> أفضل وأضعف يوم (حسب نسبة الإنجاز)</div>
+    <div class="line-grid" id="weeklyBestWorst"></div>
+
+    <div class="section-title"><span class="bar"></span> أداء الخطوط أسبوعيًا</div>
+    <div class="table-wrap">
+      <table id="weeklyLineTable">
+        <thead><tr><th>الخط</th><th>الهدف</th><th>الفعلي</th><th>المتبقي</th><th>الإنجاز</th><th>النقص</th><th>الأوفر تايم</th><th>الحالة</th></tr></thead>
+        <tbody id="weeklyLineTableBody"></tbody>
+      </table>
+    </div>
+
+    <div class="section-title"><span class="bar"></span> تفصيل الأيام</div>
+    <div class="table-wrap">
+      <table id="weeklyDaysTable">
+        <thead><tr><th>اليوم</th><th>الهدف</th><th>الفعلي</th><th>الإنجاز</th><th>النقص</th><th>الأوفر تايم</th><th>الحالة</th></tr></thead>
+        <tbody id="weeklyDaysTableBody"></tbody>
+      </table>
+    </div>
+
+    <div class="section-title ot"><span class="bar"></span> تحليل الأوفر تايم</div>
+    <div class="card" id="weeklyOvertimeSummary"></div>
+    <div class="table-wrap" style="margin-top:10px;">
+      <table id="weeklyOvertimeTable">
+        <thead><tr><th>الخط</th><th>عادي</th><th>أوفر تايم</th><th>أيام احتاجت أوفر تايم</th><th>عوّض النقص</th><th>لم يكفِ</th></tr></thead>
+        <tbody id="weeklyOvertimeTableBody"></tbody>
+      </table>
+    </div>
+
+    <div class="section-title"><span class="bar"></span> أداء العمال</div>
+    <div class="card muted" style="margin-bottom:8px;">الترتيب حسب متوسط الإنتاج لكل فترة نشطة (لتفادي تفضيل من عمل ساعات أكثر فقط)</div>
+    <div class="card" id="weeklyWorkerPerformance" style="padding:0;"></div>
+
+    <div class="section-title"><span class="bar"></span> تنبيهات الإدارة</div>
+    <div class="alerts" id="weeklyAlerts"></div>
+
+    <div class="section-title"><span class="bar"></span> أسباب التوقف / العجز</div>
+    <div class="card" id="weeklyDowntimeAnalysis"></div>
+  </div>
+
+  <!-- ============================= MONTHLY TAB ============================= -->
+  <div id="maintab-monthly" class="maintab-panel" style="display:none;">
+
+    <div class="card">
+      <div class="entry-row" style="grid-template-columns:1fr 1fr;">
+        <div class="field" style="margin-bottom:0;">
+          <label>الشهر</label>
+          <select id="monthlyMonth"></select>
+        </div>
+        <div class="field" style="margin-bottom:0;">
+          <label>السنة</label>
+          <select id="monthlyYear"></select>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-title"><span class="bar"></span> التقرير الشهري</div>
+    <div class="kpi-grid" id="monthlyKpiGrid"></div>
+
+    <div class="card" id="monthlyComparisonCard" style="margin-top:14px;"></div>
+
+    <div class="section-title"><span class="bar"></span> اتجاه الإنتاج الشهري</div>
+    <div class="chart-card"><canvas id="monthlyTrendChart" height="220"></canvas></div>
+
+    <div class="section-title"><span class="bar"></span> أفضل وأضعف يوم (حسب نسبة الإنجاز)</div>
+    <div class="line-grid" id="monthlyBestWorst"></div>
+
+    <div class="section-title"><span class="bar"></span> ترتيب أداء الخطوط</div>
+    <div class="table-wrap">
+      <table id="monthlyLineTable">
+        <thead><tr><th>#</th><th>الخط</th><th>الهدف</th><th>الفعلي</th><th>الإنجاز</th><th>النقص</th><th>الأوفر تايم</th><th>الحالة</th></tr></thead>
+        <tbody id="monthlyLineTableBody"></tbody>
+      </table>
+    </div>
+
+    <div class="section-title"><span class="bar"></span> ثبات أداء الخطوط</div>
+    <div class="table-wrap">
+      <table id="monthlyConsistencyTable">
+        <thead><tr><th>الخط</th><th>متوسط الإنجاز</th><th>أفضل</th><th>أضعف</th><th>أيام متأخرة</th><th>أيام محققة</th><th>تكرار الأوفر تايم</th></tr></thead>
+        <tbody id="monthlyConsistencyTableBody"></tbody>
+      </table>
+    </div>
+
+    <div class="section-title ot"><span class="bar"></span> تحليل الأوفر تايم</div>
+    <div class="card" id="monthlyOvertimeSummary"></div>
+    <div class="table-wrap" style="margin-top:10px;">
+      <table id="monthlyOvertimeTable">
+        <thead><tr><th>الخط</th><th>عادي</th><th>أوفر تايم</th><th>أيام احتاجت أوفر تايم</th><th>عوّض النقص</th><th>لم يكفِ</th></tr></thead>
+        <tbody id="monthlyOvertimeTableBody"></tbody>
+      </table>
+    </div>
+
+    <div class="section-title"><span class="bar"></span> أفضل أداء (العمال والخطوط)</div>
+    <div class="line-grid" id="monthlyTopPerformers"></div>
+
+    <div class="section-title"><span class="bar"></span> أداء العمال</div>
+    <div class="card muted" style="margin-bottom:8px;">الترتيب حسب متوسط الإنتاج لكل فترة نشطة</div>
+    <div class="card" id="monthlyWorkerPerformance" style="padding:0;"></div>
+
+    <div class="section-title"><span class="bar"></span> تنبيهات الإدارة</div>
+    <div class="alerts" id="monthlyAlerts"></div>
+
+    <div class="section-title"><span class="bar"></span> أسباب التوقف / العجز</div>
+    <div class="card" id="monthlyDowntimeAnalysis"></div>
+  </div>
+
+</main>
+
+<script src="config.js"></script>
+<script src="engine.js"></script>
+<script src="app.js"></script>
+<script src="reports.js"></script>
+<script src="executive.js"></script>
+</body>
+</html>

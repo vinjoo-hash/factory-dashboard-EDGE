@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>لوحة تحكم الإدارة</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="app-header">
+  <div class="top-bar-admin">
+    <div class="brand">⚙ لوحة تحكم الإدارة</div>
+    <span class="muted" id="adminSlotInfo"></span>
+  </div>
+</header>
+
+<main>
+
+  <!-- Login gate -->
+  <div class="card" id="loginCard">
+    <div class="field">
+      <label>كلمة مرور الإدارة</label>
+      <input type="password" id="adminKeyInput" placeholder="أدخل كلمة المرور">
+    </div>
+    <button class="btn-primary" onclick="doLogin()">دخول</button>
+  </div>
+
+  <!-- Main admin UI (hidden until login) -->
+  <div id="adminApp" style="display:none;">
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="entry" onclick="switchTab('entry')">تحديث الإنتاج</button>
+      <button class="tab-btn" data-tab="workers" onclick="switchTab('workers')">العمال</button>
+      <button class="tab-btn" data-tab="targets" onclick="switchTab('targets')">أهداف الخطوط</button>
+      <button class="tab-btn" data-tab="slots" onclick="switchTab('slots')">جدول الفترات</button>
+      <button class="tab-btn" data-tab="quality" onclick="switchTab('quality')">جودة البيانات</button>
+    </div>
+
+    <!-- TAB: entry -->
+    <div class="tab-panel" id="tab-entry">
+      <div class="card">
+        <div class="field">
+          <label>اليوم</label>
+          <input type="date" id="entryDate">
+        </div>
+        <div class="field">
+          <label>الفترة الحالية</label>
+          <select id="entrySlot"></select>
+        </div>
+      </div>
+
+      <div class="card">
+        <div id="entryRows"></div>
+        <button class="btn-add" onclick="addEntryRow()">+ إضافة عامل</button>
+      </div>
+
+      <button class="btn-primary" onclick="saveProduction()">حفظ الإنتاج</button>
+
+      <div class="card" style="margin-top:14px;">
+        <div class="section-title"><span class="bar"></span> سبب توقف / عجز (اختياري)</div>
+        <div class="entry-row">
+          <div><select id="downtimeLine"></select></div>
+          <div><select id="downtimeReason"><option value="">اختر السبب (اختياري)</option><option>عطل ماكينة</option><option>نقص مواد خام</option><option>نقص عمال</option><option>تغيير أوردر</option><option>جودة / إعادة تشغيل</option><option>توقف مخطط</option><option>تجهيز / تغيير موديل</option><option>أخرى</option><option>غير محدد</option></select></div>
+          <div><input type="text" id="downtimeNotes" placeholder="ملاحظات اختيارية"></div>
+        </div>
+        <button class="btn-secondary" onclick="saveDowntimeReason()">حفظ السبب</button>
+      </div>
+    </div>
+
+    <!-- TAB: workers -->
+    <div class="tab-panel" id="tab-workers" style="display:none;">
+      <div class="card">
+        <div class="field"><label>اسم العامل الجديد</label><input type="text" id="newWorkerName"></div>
+        <button class="btn-primary" onclick="addWorker()">إضافة عامل</button>
+      </div>
+      <div class="card" id="workersList" style="padding:0;"></div>
+    </div>
+
+    <!-- TAB: targets -->
+    <div class="tab-panel" id="tab-targets" style="display:none;">
+      <div class="card">
+        <div class="field"><label>اليوم</label><input type="date" id="targetDate"></div>
+        <div class="field"><label>الخط</label><input type="text" id="targetLine" placeholder="مثال: Line(4)"></div>
+        <div class="field"><label>الهدف اليومي</label><input type="number" id="targetValue"></div>
+        <div class="field"><label>ساعات العمل العادية المخططة</label><input type="number" id="targetHours" value="6"></div>
+        <div class="field"><label>الهدف بالساعة (اختياري)</label><input type="number" id="targetHourly" placeholder="يُحسب تلقائيًا إذا تُرك فارغًا"></div>
+        <button class="btn-primary" onclick="saveTarget()">حفظ الهدف</button>
+      </div>
+      <div class="card" id="targetsList"></div>
+    </div>
+
+    <!-- TAB: slots -->
+    <div class="tab-panel" id="tab-slots" style="display:none;">
+      <div class="card muted">جدول الفترات محرَّر مباشرة من شيت SlotConfig في Google Sheets. يظهر هنا للعرض فقط.</div>
+      <div class="table-wrap"><table id="slotConfigTable"><thead><tr><th>فترة</th><th>من</th><th>إلى</th><th>نوع</th></tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="tab-panel" id="tab-quality" style="display:none;">
+      <div class="card muted">الفحص يكتشف مؤشرات تحتاج مراجعة فقط؛ لا يحذف أو يصحح أي بيانات تلقائيًا.</div>
+      <div class="card" id="dataQualityReport"></div>
+    </div>
+
+  </div>
+
+</main>
+
+<div id="toastHost"></div>
+
+<script src="config.js"></script>
+<script src="engine.js"></script>
+<script src="admin.js"></script>
+</body>
+</html>
