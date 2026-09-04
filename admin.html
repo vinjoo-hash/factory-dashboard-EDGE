@@ -31,6 +31,7 @@
 
     <div class="tabs">
       <button class="tab-btn active" data-tab="entry" onclick="switchTab('entry')">تحديث الإنتاج</button>
+      <button class="tab-btn" data-tab="records" onclick="switchTab('records')">سجلات الإنتاج</button>
       <button class="tab-btn" data-tab="workers" onclick="switchTab('workers')">العمال</button>
       <button class="tab-btn" data-tab="targets" onclick="switchTab('targets')">أهداف الخطوط</button>
       <button class="tab-btn" data-tab="slots" onclick="switchTab('slots')">جدول الفترات</button>
@@ -66,6 +67,30 @@
         </div>
         <button class="btn-secondary" onclick="saveDowntimeReason()">حفظ السبب</button>
       </div>
+    </div>
+
+    <!-- TAB: production records (view / edit / delete) -->
+    <div class="tab-panel" id="tab-records" style="display:none;">
+      <div class="card">
+        <div class="field" style="margin-bottom:0;">
+          <label>عرض سجلات يوم</label>
+          <input type="date" id="recordsDate">
+        </div>
+      </div>
+
+      <div id="recordEditCard" class="card" style="display:none;">
+        <div class="section-title"><span class="bar"></span> تعديل السجل</div>
+        <div class="field"><label>العامل</label><select id="editWorker"></select></div>
+        <div class="field"><label>الخط</label><select id="editLine"></select></div>
+        <div class="field"><label>الفترة</label><select id="editSlot"></select></div>
+        <div class="field"><label>الكمية</label><input type="number" id="editQty" min="0"></div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn-primary" onclick="saveEditedRecord()">حفظ التعديل</button>
+          <button class="btn-secondary" onclick="cancelEditRecord()">إلغاء</button>
+        </div>
+      </div>
+
+      <div class="card" id="recordsList" style="padding:0;"></div>
     </div>
 
     <!-- TAB: workers -->

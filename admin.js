@@ -5,6 +5,7 @@
 
 let ADMIN = { key: '', slotConfig: [], workers: [], allWorkers: [], lines: [], records: [], downtimeLogs: [] };
 let rowCounter = 0;
+let EDITING_RECORD_ID = null;
 
 function toast(msg, isError) {
   const host = document.getElementById('toastHost');
@@ -13,6 +14,45 @@ function toast(msg, isError) {
   el.textContent = msg;
   host.appendChild(el);
   setTimeout(() => el.remove(), 2600);
+}
+
+/**
+ * Every write goes through this instead of a raw fetch(). Two things this
+ * buys us that a plain fetch doesn't:
+ * 1. A hard timeout (default 15s) via AbortController — a hung request (bad
+ *    network, a slow Apps Script cold start) can no longer leave a button
+ *    stuck on "جاري الحفظ..." forever with no feedback.
+ * 2. One place that always returns a PARSED, predictable shape, so callers
+ *    never have to guess whether res.json() itself might throw.
+ */
+async function postAction(action, payload, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs || 15000);
+  try {
+    const res = await fetch(CONFIG.API_URL, {
+      method: 'POST',
+      body: JSON.stringify({ action, adminKey: ADMIN.key, ...payload }),
+      signal: controller.signal,
+    });
+    let data;
+    try { data = await res.json(); }
+    catch (parseErr) { return { ok: false, message: 'لم يتم حفظ البيانات، حاول مرة أخرى', _technical: 'Bad JSON response: ' + parseErr.message }; }
+    return data;
+  } catch (err) {
+    if (err.name === 'AbortError') return { ok: false, message: 'انتهت مهلة الاتصال بالخادم، حاول مرة أخرى', _technical: 'timeout' };
+    return { ok: false, message: 'لم يتم حفظ البيانات، حاول مرة أخرى', _technical: err.message };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Shows the right toast for any postAction() result, logging the technical detail to console only (never to the user). */
+function handleActionResult(data, successMessage) {
+  if (data._technical) console.error('[admin]', data._technical);
+  if (data.error === 'SERVER_BUSY_TRY_AGAIN') { toast('الخادم مشغول بحفظ سابق، حاول مرة أخرى بعد ثانية', true); return false; }
+  if (!data.ok) { toast(data.message || 'لم يتم حفظ البيانات، حاول مرة أخرى', true); return false; }
+  toast(data.message || successMessage || 'تم الحفظ بنجاح ✓');
+  return true;
 }
 
 function doLogin() {
@@ -44,6 +84,7 @@ async function loadAdminData() {
     renderSlotConfigTable();
     populateDowntimeLines();
     renderDataQualityReport();
+    renderRecordsList();
   } catch (err) {
     toast('فشل الاتصال — تحقق من الرابط في config.js', true);
     console.error(err);
@@ -55,6 +96,7 @@ function switchTab(name) {
   document.querySelectorAll('.tab-panel').forEach(p => p.style.display = 'none');
   document.getElementById('tab-' + name).style.display = 'block';
   if (name === 'quality') renderDataQualityReport();
+  if (name === 'records') renderRecordsList();
 }
 
 // ---------- ENTRY TAB ----------
@@ -141,20 +183,114 @@ async function saveProduction() {
   if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'جاري الحفظ...'; }
 
   try {
-    const res = await fetch(CONFIG.API_URL, {
-      method: 'POST',
-      body: JSON.stringify({ action: 'saveProduction', adminKey: ADMIN.key, entries }),
-    });
-    const data = await res.json();
-    if (data.error === 'SERVER_BUSY_TRY_AGAIN') { toast('الخادم مشغول بحفظ سابق، حاول مرة أخرى بعد ثانية', true); return; }
-    if (!data.ok) throw new Error(data.error);
-    toast('تم حفظ الإنتاج بنجاح ✓');
-    loadAdminData();
-  } catch (err) {
-    toast('فشل الحفظ: ' + err.message, true);
+    const data = await postAction('saveProduction', { entries });
+    if (handleActionResult(data, 'تم حفظ الإنتاج بنجاح')) loadAdminData();
   } finally {
     SAVE_IN_PROGRESS = false;
     if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'حفظ الإنتاج'; }
+  }
+}
+
+// ---------- PRODUCTION RECORDS TAB (view / edit / delete) ----------
+
+function renderRecordsList() {
+  const dateInput = document.getElementById('recordsDate');
+  if (!dateInput.value) dateInput.value = Engine.fmtDate(new Date());
+  if (!dateInput.dataset.wired) { dateInput.dataset.wired = '1'; dateInput.addEventListener('change', renderRecordsList); }
+
+  const date = dateInput.value;
+  const dayRecords = ADMIN.records
+    .filter(r => r.date === date)
+    .sort((a, b) => String(a.slot).localeCompare(String(b.slot), undefined, { numeric: true }) || a.line.localeCompare(b.line));
+
+  const box = document.getElementById('recordsList');
+  if (!dayRecords.length) { box.innerHTML = '<div class="empty-state">لا توجد سجلات إنتاج لهذا اليوم</div>'; return; }
+
+  box.innerHTML = dayRecords.map(r => `
+    <div class="worker-row">
+      <div>
+        <b>${r.worker}</b> — ${r.line}
+        <div class="lines">فترة ${r.slot} · ${r.type === 'OVERTIME' ? 'أوفر تايم' : 'عادي'} · الكمية: ${r.production}</div>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button class="btn-secondary" onclick="editProductionRecord('${r.recordId}')">تعديل</button>
+        <button class="btn-danger" onclick="deleteProductionRecord('${r.recordId}')">حذف</button>
+      </div>
+    </div>`).join('');
+}
+
+function editProductionRecord(recordId) {
+  const r = ADMIN.records.find(x => x.recordId === recordId);
+  if (!r) { toast('لم يتم العثور على هذا السجل — حدّث الصفحة وحاول مرة أخرى', true); return; }
+  EDITING_RECORD_ID = recordId;
+
+  document.getElementById('editWorker').innerHTML = workerOptionsHTML(r.worker);
+  document.getElementById('editLine').innerHTML = lineOptionsHTML(r.line);
+  const sortedSlots = [...ADMIN.slotConfig].sort((a, b) => Engine.timeToMinutes(a.start) - Engine.timeToMinutes(b.start));
+  document.getElementById('editSlot').innerHTML = sortedSlots.map(s => `<option value="${s.slot}" ${String(s.slot) === String(r.slot) ? 'selected' : ''}>فترة ${s.slot} (${s.start}–${s.end})${s.type === 'OVERTIME' ? ' - أوفر تايم' : ''}</option>`).join('');
+  document.getElementById('editQty').value = r.production;
+
+  document.getElementById('recordEditCard').style.display = 'block';
+  document.getElementById('recordEditCard').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function cancelEditRecord() {
+  EDITING_RECORD_ID = null;
+  document.getElementById('recordEditCard').style.display = 'none';
+}
+
+async function saveEditedRecord() {
+  if (!EDITING_RECORD_ID) return;
+  const original = ADMIN.records.find(x => x.recordId === EDITING_RECORD_ID);
+  if (!original) { toast('لم يتم العثور على هذا السجل', true); cancelEditRecord(); return; }
+
+  const newQty = document.getElementById('editQty').value;
+  if (newQty === '' || Number(newQty) < 0 || isNaN(Number(newQty))) { toast('كمية غير صالحة', true); return; }
+
+  const newWorker = document.getElementById('editWorker').value;
+  const newLine = document.getElementById('editLine').value;
+  const newSlot = document.getElementById('editSlot').value;
+  const slotInfo = ADMIN.slotConfig.find(s => String(s.slot) === String(newSlot));
+
+  // Ask for confirmation only when the change is substantial (quantity moved
+  // by more than a small amount, or the worker/line/slot itself changed) —
+  // per the requested UX: don't nag for a trivial correction.
+  const qtyChanged = Number(newQty) !== Number(original.production);
+  const bigChange = Math.abs(Number(newQty) - Number(original.production)) >= Math.max(20, Number(original.production) * 0.3);
+  const identityChanged = newWorker !== original.worker || newLine !== original.line || String(newSlot) !== String(original.slot);
+  if (bigChange || identityChanged) {
+    const ok = confirm('هذا تعديل جوهري على السجل — هل أنت متأكد من الحفظ؟');
+    if (!ok) return;
+  }
+
+  const editBtn = document.querySelector('#recordEditCard .btn-primary');
+  if (editBtn) { editBtn.disabled = true; editBtn.textContent = 'جاري الحفظ...'; }
+
+  try {
+    const data = await postAction('updateProduction', {
+      recordId: EDITING_RECORD_ID,
+      date: original.date, slot: newSlot, worker: newWorker, line: newLine,
+      production: newQty, type: slotInfo ? slotInfo.type : original.type,
+    });
+    if (handleActionResult(data, 'تم تعديل الإنتاج بنجاح')) {
+      cancelEditRecord();
+      loadAdminData();
+    }
+  } finally {
+    if (editBtn) { editBtn.disabled = false; editBtn.textContent = 'حفظ التعديل'; }
+  }
+}
+
+async function deleteProductionRecord(recordId) {
+  const r = ADMIN.records.find(x => x.recordId === recordId);
+  const label = r ? `${r.worker} — ${r.line} — فترة ${r.slot} — ${r.production} قطعة` : 'هذا السجل';
+  const ok = confirm(`هل أنت متأكد من حذف: ${label}؟ لا يمكن التراجع عن هذا الإجراء.`);
+  if (!ok) return;
+
+  const data = await postAction('deleteProduction', { recordId });
+  if (handleActionResult(data, 'تم حذف السجل بنجاح')) {
+    if (EDITING_RECORD_ID === recordId) cancelEditRecord();
+    loadAdminData();
   }
 }
 
@@ -165,15 +301,12 @@ async function saveDowntimeReason() {
   const reason = document.getElementById('downtimeReason').value;
   const notes = document.getElementById('downtimeNotes').value.trim();
   if (!date || !slot || !line || !reason) { toast('اختر الخط والسبب قبل الحفظ', true); return; }
-  try {
-    const res = await fetch(CONFIG.API_URL, { method: 'POST', body: JSON.stringify({ action: 'saveDowntimeReason', adminKey: ADMIN.key, date, slot, line, reason, notes }) });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error);
-    toast('تم حفظ سبب التوقف');
+  const data = await postAction('saveDowntimeReason', { date, slot, line, reason, notes });
+  if (handleActionResult(data, 'تم حفظ سبب التوقف')) {
     document.getElementById('downtimeReason').value = '';
     document.getElementById('downtimeNotes').value = '';
     loadAdminData();
-  } catch (err) { toast('فشل حفظ السبب: ' + err.message, true); }
+  }
 }
 
 // ---------- WORKERS TAB ----------
@@ -191,25 +324,17 @@ function renderWorkersList() {
 async function addWorker() {
   const name = document.getElementById('newWorkerName').value.trim();
   if (!name) { toast('أدخل اسم العامل', true); return; }
-  try {
-    const res = await fetch(CONFIG.API_URL, { method: 'POST', body: JSON.stringify({ action: 'saveWorker', adminKey: ADMIN.key, name, active: true }) });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error);
+  const data = await postAction('saveWorker', { name, active: true });
+  if (handleActionResult(data, 'تمت إضافة العامل')) {
     document.getElementById('newWorkerName').value = '';
-    toast('تمت إضافة العامل');
     loadAdminData();
-  } catch (err) { toast('فشل: ' + err.message, true); }
+  }
 }
 
 async function removeWorker(id) {
   const w = ADMIN.workers.find(x => x.id === id);
-  try {
-    const res = await fetch(CONFIG.API_URL, { method: 'POST', body: JSON.stringify({ action: 'saveWorker', adminKey: ADMIN.key, id, name: w.name, active: false }) });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error);
-    toast('تمت إزالة العامل');
-    loadAdminData();
-  } catch (err) { toast('فشل: ' + err.message, true); }
+  const data = await postAction('saveWorker', { id, name: w.name, active: false });
+  if (handleActionResult(data, 'تمت إزالة العامل')) loadAdminData();
 }
 
 // ---------- TARGETS TAB ----------
@@ -231,13 +356,8 @@ async function saveTarget() {
   const plannedHours = document.getElementById('targetHours').value || 6;
   const hourlyTarget = document.getElementById('targetHourly').value || '';
   if (!date || !line || !target) { toast('أكمل جميع الحقول المطلوبة', true); return; }
-  try {
-    const res = await fetch(CONFIG.API_URL, { method: 'POST', body: JSON.stringify({ action: 'setTarget', adminKey: ADMIN.key, date, line, target, plannedHours, hourlyTarget }) });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error);
-    toast('تم حفظ الهدف');
-    loadAdminData();
-  } catch (err) { toast('فشل: ' + err.message, true); }
+  const data = await postAction('setTarget', { date, line, target, plannedHours, hourlyTarget });
+  if (handleActionResult(data, 'تم حفظ الهدف')) loadAdminData();
 }
 
 // ---------- SLOTS TAB (read-only view) ----------
