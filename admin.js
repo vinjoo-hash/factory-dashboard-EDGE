@@ -118,6 +118,10 @@ function initEntryTab() {
 }
 
 function currentEntrySlotType() {
+  // Business rule: the entire Friday counts as OVERTIME regardless of what
+  // SlotConfig says for the selected slot (see engine.js: Engine.isOvertimeDate).
+  const date = document.getElementById('entryDate').value;
+  if (date && Engine.isOvertimeDate(date)) return 'OVERTIME';
   const slotVal = document.getElementById('entrySlot').value;
   const s = ADMIN.slotConfig.find(x => String(x.slot) === String(slotVal));
   return s ? s.type : 'NORMAL';
@@ -274,7 +278,8 @@ async function saveEditedRecord() {
     const data = await postAction('updateProduction', {
       recordId: EDITING_RECORD_ID,
       date: original.date, slot: newSlot, worker: newWorker, line: newLine,
-      production: newQty, type: slotInfo ? slotInfo.type : original.type,
+      production: newQty,
+      type: Engine.isOvertimeDate(original.date) ? 'OVERTIME' : (slotInfo ? slotInfo.type : original.type),
     });
     if (handleActionResult(data, 'تم تعديل الإنتاج بنجاح')) {
       cancelEditRecord();

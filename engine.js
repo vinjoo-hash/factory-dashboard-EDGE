@@ -25,6 +25,20 @@ const Engine = (function () {
   }
 
   /**
+   * BUSINESS RULE (Friday override): the entire day of Friday is treated as
+   * OVERTIME, regardless of what SlotConfig says for any individual slot.
+   * This does NOT change SlotConfig itself — slot times/breaks stay exactly
+   * as configured — it only reclassifies the WORK-TYPE of that day. A single
+   * function decides this so nothing else has to know "which weekday is
+   * overtime" on its own (see getStatus() and getEffectiveSlotType() below,
+   * which are the only two places that call this).
+   */
+  function isOvertimeDate(dateOrNow) {
+    const d = (dateOrNow instanceof Date) ? dateOrNow : new Date(dateOrNow + 'T00:00:00');
+    return d.getDay() === 5; // JS: Sunday=0 ... Friday=5
+  }
+
+  /**
    * slotConfig: array of { slot, start: "08:30", end: "09:30", type: "NORMAL"|"OVERTIME" }
    * Gaps between consecutive slots (or before the first / after the last) are BREAK / NOT_STARTED / SHIFT_ENDED.
    */
@@ -35,6 +49,7 @@ const Engine = (function () {
 
     const dayStart = timeToMinutes(sorted[0].start);
     const dayEnd = timeToMinutes(sorted[sorted.length - 1].end);
+    const fridayOverride = isOvertimeDate(now);
 
     if (nm < dayStart) return { status: 'NOT_STARTED', slot: null };
     if (nm >= dayEnd) return { status: 'SHIFT_ENDED', slot: null };
@@ -43,12 +58,13 @@ const Engine = (function () {
       const s = sorted[i];
       const st = timeToMinutes(s.start), en = timeToMinutes(s.end);
       if (nm >= st && nm < en) {
-        return { status: s.type === 'OVERTIME' ? 'OVERTIME' : 'NORMAL_WORK', slot: s.slot };
+        const isOT = fridayOverride || s.type === 'OVERTIME';
+        return { status: isOT ? 'OVERTIME' : 'NORMAL_WORK', slot: s.slot };
       }
       // gap before the next slot = break
       const next = sorted[i + 1];
       if (next && nm >= en && nm < timeToMinutes(next.start)) {
-        const inOvertimeZone = s.type === 'OVERTIME' || next.type === 'OVERTIME';
+        const inOvertimeZone = fridayOverride || s.type === 'OVERTIME' || next.type === 'OVERTIME';
         return { status: inOvertimeZone ? 'OVERTIME_BREAK' : 'BREAK', slot: null };
       }
     }
@@ -660,8 +676,20 @@ const Engine = (function () {
     return alerts;
   }
 
+  /**
+   * The single source of truth for "is this specific slot, on this specific
+   * date, NORMAL or OVERTIME work" — used at SAVE time (admin.js tags every
+   * production record with this) so the Friday rule is baked into the data
+   * itself, not recomputed differently by every report later.
+   */
+  function getEffectiveSlotType(slotConfig, dateStr, slotValue) {
+    if (isOvertimeDate(dateStr)) return 'OVERTIME';
+    const s = slotConfig.find(x => String(x.slot) === String(slotValue));
+    return s ? s.type : 'NORMAL';
+  }
+
   return {
-    getStatus, totalMinutesOfType, elapsedMinutesOfType,
+    getStatus, totalMinutesOfType, elapsedMinutesOfType, isOvertimeDate, getEffectiveSlotType,
     computeAchievement, computeShortage, computeRemaining, computeExpected, elapsedGraceAdjustedMinutes,
     computeOvertimeMetrics, estimateCompletion,
     filterByDate, lineTotal, slotTotal, workerTotal, workerLines, factoryTotal,

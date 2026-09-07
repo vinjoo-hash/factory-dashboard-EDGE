@@ -108,7 +108,8 @@ function renderDailyTab() {
   const sortedSlots = [...STATE.slotConfig].sort((a, b) => Engine.timeToMinutes(a.start) - Engine.timeToMinutes(b.start));
   document.getElementById('dailySlotTableBody').innerHTML = sortedSlots.map(s => {
     const total = lineNames.reduce((sum, l) => sum + Engine.slotTotal(dayRecords, l, s.slot), 0);
-    return `<tr class="${s.type === 'OVERTIME' ? 'overtime-slot' : ''}"><td>${s.slot}</td><td>${s.start}–${s.end}</td><td>${s.type === 'OVERTIME' ? 'أوفر تايم' : 'عادي'}</td><td>${total || '-'}</td></tr>`;
+    const isOT = Engine.getEffectiveSlotType(STATE.slotConfig, dateStr, s.slot) === 'OVERTIME';
+    return `<tr class="${isOT ? 'overtime-slot' : ''}"><td>${s.slot}</td><td>${s.start}–${s.end}</td><td>${isOT ? 'أوفر تايم' : 'عادي'}</td><td>${total || '-'}</td></tr>`;
   }).join('');
 
   // Line chart: target vs actual

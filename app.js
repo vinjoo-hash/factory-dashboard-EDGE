@@ -265,6 +265,7 @@ function renderSlotTable(records, lineNames, now, statusInfo) {
     `<th>الإجمالي</th><th>الفارق</th>`;
   const sorted = [...STATE.slotConfig].sort((a, b) => Engine.timeToMinutes(a.start) - Engine.timeToMinutes(b.start));
   const nowMin = now.getHours() * 60 + now.getMinutes();
+  const todayStr = Engine.fmtDate(now);
 
   const rows = [];
   sorted.forEach((s, i) => {
@@ -274,11 +275,13 @@ function renderSlotTable(records, lineNames, now, statusInfo) {
     const isCurrent = String(s.slot) === String(statusInfo.slot);
     const isPast = Engine.timeToMinutes(s.end) <= nowMin;
     const rowClass = isCurrent ? 'current-slot' : (isPast ? 'past-slot' : '');
-    const typeClass = s.type === 'OVERTIME' ? ' overtime-slot' : '';
+    // Effective type accounts for the Friday-is-overtime rule, not just SlotConfig.
+    const isOT = Engine.getEffectiveSlotType(STATE.slotConfig, todayStr, s.slot) === 'OVERTIME';
+    const typeClass = isOT ? ' overtime-slot' : '';
     rows.push(`
       <tr class="${rowClass}${typeClass}">
         <td>${s.slot}</td><td>${s.start}–${s.end}</td>
-        <td>${s.type === 'OVERTIME' ? 'أوفر تايم' : 'عادي'}</td>
+        <td>${isOT ? 'أوفر تايم' : 'عادي'}</td>
         <td>—</td>
         ${perLine.map(v => `<td>${v || '-'}</td>`).join('')}
         <td><b>${total || '-'}</b></td>
@@ -299,19 +302,23 @@ function renderCumulativeChart(records, targets, lineNames, now) {
   const sorted = [...STATE.slotConfig].sort((a, b) => Engine.timeToMinutes(a.start) - Engine.timeToMinutes(b.start));
   const totalTarget = lineNames.reduce((s, l) => s + ((targets[l] && targets[l].target) || 0), 0);
   const totalNormalMin = Engine.totalMinutesOfType(STATE.slotConfig, 'NORMAL');
+  const todayStr = Engine.fmtDate(now);
 
   let cumActual = 0;
-  const labels = [], expectedData = [], actualData = [], otBoundaryIdx = sorted.findIndex(s => s.type === 'OVERTIME');
+  const labels = [], expectedData = [], actualData = [];
 
   sorted.forEach(s => {
     labels.push(s.slot);
     const slotSum = lineNames.reduce((sum, l) => sum + Engine.slotTotal(records, l, s.slot), 0);
     cumActual += slotSum;
     actualData.push(cumActual);
-    // expected at the END of this slot
+    // expected at the END of this slot — Friday-is-overtime override applies
+    // here too: on a Friday, every slot behaves like OVERTIME (expected
+    // frozen at 100% of target), matching Engine.computeExpected's own rule.
     const fakeNow = new Date(now); fakeNow.setHours(0, Engine.timeToMinutes(s.end), 0, 0);
+    const effectiveType = Engine.getEffectiveSlotType(STATE.slotConfig, todayStr, s.slot);
     let expected;
-    if (s.type === 'NORMAL') {
+    if (effectiveType === 'NORMAL') {
       const elapsed = Engine.elapsedMinutesOfType(STATE.slotConfig, fakeNow, 'NORMAL');
       expected = totalTarget * (totalNormalMin > 0 ? elapsed / totalNormalMin : 0);
     } else {
@@ -351,12 +358,13 @@ function renderLineCompareChart(records, targets, lineNames) {
 
 function renderHourlyChart(records, lineNames, now) {
   const sorted = [...STATE.slotConfig].sort((a, b) => Engine.timeToMinutes(a.start) - Engine.timeToMinutes(b.start));
+  const todayStr = Engine.fmtDate(now);
   const labels = sorted.map(s => s.slot);
   const actual = sorted.map(s => lineNames.reduce((sum, l) => sum + Engine.slotTotal(records, l, s.slot), 0));
   destroyChart('hourly');
   charts.hourly = new Chart(document.getElementById('hourlyChart'), {
     type: 'bar',
-    data: { labels, datasets: [{ label: 'إنتاج الفترة', data: actual, backgroundColor: sorted.map(s => s.type === 'OVERTIME' ? '#f0a93a' : '#4a90d9') }] },
+    data: { labels, datasets: [{ label: 'إنتاج الفترة', data: actual, backgroundColor: sorted.map(s => Engine.getEffectiveSlotType(STATE.slotConfig, todayStr, s.slot) === 'OVERTIME' ? '#f0a93a' : '#4a90d9') }] },
     options: chartBaseOptions('فترة الإنتاج'),
   });
 }
