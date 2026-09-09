@@ -9,6 +9,24 @@
 </head>
 <body>
 
+<!-- Login gate: the public dashboard now requires a viewer account. -->
+<div id="viewerLoginWrap" style="max-width:420px; margin:60px auto; padding:0 16px;">
+  <div class="card">
+    <div class="brand" style="justify-content:center; margin-bottom:16px;">لوحة متابعة الإنتاج</div>
+    <div class="field">
+      <label>اسم المستخدم</label>
+      <input type="text" id="viewerUsername" autocomplete="username">
+    </div>
+    <div class="field">
+      <label>كلمة المرور</label>
+      <input type="password" id="viewerPassword" autocomplete="current-password">
+    </div>
+    <button class="btn-primary" onclick="doViewerLogin()">دخول</button>
+    <div id="viewerLoginError" class="muted" style="color:var(--red); margin-top:10px; display:none;"></div>
+  </div>
+</div>
+
+<div id="dashboardApp" style="display:none;">
 <header class="app-header">
   <div class="brand-row">
     <div class="brand"><span class="dot" id="statusDot"></span> لوحة متابعة الإنتاج</div>
@@ -21,7 +39,7 @@
   </div>
   <div id="staleWarning" class="stale-warning" style="display:none">⚠ لم يتم تحديث بيانات الإنتاج منذ فترة طويلة</div>
 
-  <div class="tabs main-tabs">
+  <div class="tabs main-tabs" id="mainTabsBar">
     <button class="tab-btn active" data-maintab="executive" onclick="switchMainTab('executive')">تنفيذي</button>
     <button class="tab-btn" data-maintab="live" onclick="switchMainTab('live')">مباشر</button>
     <button class="tab-btn" data-maintab="daily" onclick="switchMainTab('daily')">يومي</button>
@@ -256,6 +274,7 @@
   </div>
 
 </main>
+</div>
 
 <script src="config.js"></script>
 <script src="engine.js"></script>

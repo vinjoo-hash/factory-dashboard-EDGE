@@ -3,7 +3,7 @@
  * Nothing here duplicates schedule/calculation logic — that all lives in engine.js.
  */
 
-let ADMIN = { key: '', slotConfig: [], workers: [], allWorkers: [], lines: [], records: [], downtimeLogs: [] };
+let ADMIN = { key: '', slotConfig: [], workers: [], allWorkers: [], lines: [], records: [], downtimeLogs: [], users: [] };
 let rowCounter = 0;
 let EDITING_RECORD_ID = null;
 
@@ -49,6 +49,7 @@ async function postAction(action, payload, timeoutMs) {
 /** Shows the right toast for any postAction() result, logging the technical detail to console only (never to the user). */
 function handleActionResult(data, successMessage) {
   if (data._technical) console.error('[admin]', data._technical);
+  else if (!data.ok && data.error) console.error('[admin] server rejected:', data.error, data.reason || '');
   if (data.error === 'SERVER_BUSY_TRY_AGAIN') { toast('الخادم مشغول بحفظ سابق، حاول مرة أخرى بعد ثانية', true); return false; }
   if (!data.ok) { toast(data.message || 'لم يتم حفظ البيانات، حاول مرة أخرى', true); return false; }
   toast(data.message || successMessage || 'تم الحفظ بنجاح ✓');
@@ -65,7 +66,7 @@ function doLogin() {
 
 async function loadAdminData() {
   try {
-    const res = await fetch(`${CONFIG.API_URL}?action=getData`);
+    const res = await fetch(`${CONFIG.API_URL}?action=getData&adminKey=${encodeURIComponent(ADMIN.key)}`);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error);
     ADMIN.slotConfig = data.slotConfig.map(s => ({ ...s, slot: String(s.slot) }));
@@ -74,6 +75,7 @@ async function loadAdminData() {
     ADMIN.lines = data.lines;
     ADMIN.records = data.records;
     ADMIN.downtimeLogs = data.downtimeLogs || [];
+    ADMIN.users = data.users || [];
 
     document.getElementById('loginCard').style.display = 'none';
     document.getElementById('adminApp').style.display = 'block';
@@ -85,6 +87,7 @@ async function loadAdminData() {
     populateDowntimeLines();
     renderDataQualityReport();
     renderRecordsList();
+    renderUsersList();
   } catch (err) {
     toast('فشل الاتصال — تحقق من الرابط في config.js', true);
     console.error(err);
@@ -97,6 +100,7 @@ function switchTab(name) {
   document.getElementById('tab-' + name).style.display = 'block';
   if (name === 'quality') renderDataQualityReport();
   if (name === 'records') renderRecordsList();
+  if (name === 'users') renderUsersList();
 }
 
 // ---------- ENTRY TAB ----------
@@ -385,6 +389,87 @@ function renderDataQualityReport() {
   const summary = `<div class="line-stats"><div class="cell"><div class="k">حرج</div><div class="v">${report.counts.critical}</div></div><div class="cell"><div class="k">يحتاج مراجعة</div><div class="v">${report.counts.warning}</div></div><div class="cell"><div class="k">معلومة</div><div class="v">${report.counts.info}</div></div></div>`;
   const rows = report.findings.length ? report.findings.map(f => `<div class="alert ${severity[f.severity]}"><b>${labels[f.type] || f.type}:</b> ${f.message}</div>`).join('') : '<div class="empty-state">لا توجد مؤشرات جودة حالياً</div>';
   box.innerHTML = summary + `<div class="muted" style="margin:10px 0;">وسيط الكمية المستخدمة لرصد القيم المرتفعة: ${report.medianProduction || '—'}</div><div class="alerts">${rows}</div>`;
+}
+
+// ---------- USERS TAB (viewer accounts for the public dashboard) ----------
+
+let EDITING_USERNAME = null;
+
+function toggleUserLinesField() {
+  const role = document.getElementById('userRole').value;
+  document.getElementById('userLinesField').style.display = role === 'ADMIN' ? 'none' : 'block';
+}
+
+function userLineCheckboxesHtml(selectedLines) {
+  const lines = [...new Set(ADMIN.lines.map(l => l.line))];
+  if (!lines.length) return '<div class="muted">لا توجد خطوط معرّفة بعد — أضف هدفًا لخط أولًا من تبويب "أهداف الخطوط"</div>';
+  return lines.map(line => `
+    <label style="display:flex; align-items:center; gap:8px; padding:6px 0; font-size:14px;">
+      <input type="checkbox" class="user-line-cb" value="${line}" ${selectedLines.includes(line) ? 'checked' : ''} style="width:auto;">
+      ${line}
+    </label>`).join('');
+}
+
+function renderUsersList() {
+  document.getElementById('userLinesCheckboxes').innerHTML = userLineCheckboxesHtml(EDITING_USERNAME ? (ADMIN.users.find(u => u.username === EDITING_USERNAME)?.allowedLines || []) : []);
+  toggleUserLinesField();
+
+  const box = document.getElementById('usersList');
+  if (!ADMIN.users.length) { box.innerHTML = '<div class="empty-state">لا يوجد مستخدمون بعد — أضف أول حساب أعلاه</div>'; return; }
+  box.innerHTML = ADMIN.users.map(u => `
+    <div class="worker-row">
+      <div>
+        <span class="name">${u.username}</span>${!u.active ? ' <span class="muted">(معطّل)</span>' : ''}
+        <div class="lines">${u.role === 'ADMIN' ? 'مدير / Management — كل الخطوط' : ('مستخدم خط — ' + (u.allowedLines.join('، ') || 'بدون خطوط محددة'))}</div>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button class="btn-secondary" onclick="editUserAccount('${u.username}')">تعديل</button>
+        <button class="btn-danger" onclick="toggleUserActive('${u.username}', ${!u.active})">${u.active ? 'تعطيل' : 'تفعيل'}</button>
+      </div>
+    </div>`).join('');
+}
+
+function editUserAccount(username) {
+  const u = ADMIN.users.find(x => x.username === username);
+  if (!u) return;
+  EDITING_USERNAME = username;
+  document.getElementById('userUsername').value = u.username;
+  document.getElementById('userPassword').value = '';
+  document.getElementById('userPassword').placeholder = 'اتركه فاضي للإبقاء على نفس كلمة المرور الحالية';
+  document.getElementById('userRole').value = u.role;
+  document.getElementById('userLinesCheckboxes').innerHTML = userLineCheckboxesHtml(u.allowedLines);
+  toggleUserLinesField();
+  document.getElementById('userFormCard').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+async function saveUserAccount() {
+  const username = document.getElementById('userUsername').value.trim();
+  const password = document.getElementById('userPassword').value;
+  const role = document.getElementById('userRole').value;
+  const allowedLines = [...document.querySelectorAll('.user-line-cb:checked')].map(cb => cb.value);
+
+  if (!username) { toast('أدخل اسم المستخدم', true); return; }
+  if (role === 'LINE_VIEWER' && !allowedLines.length) { toast('اختر خطًا واحدًا على الأقل لهذا المستخدم', true); return; }
+  const isNew = !ADMIN.users.some(u => u.username === username);
+  if (isNew && !password) { toast('كلمة المرور مطلوبة عند إضافة مستخدم جديد', true); return; }
+
+  const data = await postAction('saveUser', { username, password, role, allowedLines, active: true });
+  if (data.error === 'USERS_SHEET_MISSING') { toast('لازم تنشئ شيت Users أولًا من قايمة Factory Dashboard Admin في الشيت', true); return; }
+  if (handleActionResult(data, isNew ? 'تمت إضافة المستخدم' : 'تم تعديل المستخدم')) {
+    EDITING_USERNAME = null;
+    document.getElementById('userUsername').value = '';
+    document.getElementById('userPassword').value = '';
+    document.getElementById('userPassword').placeholder = 'اتركه فاضي عند التعديل للإبقاء على نفس الباسورد';
+    document.getElementById('userRole').value = 'LINE_VIEWER';
+    loadAdminData();
+  }
+}
+
+async function toggleUserActive(username, makeActive) {
+  const u = ADMIN.users.find(x => x.username === username);
+  if (!u) return;
+  const data = await postAction('saveUser', { username, role: u.role, allowedLines: u.allowedLines, active: makeActive });
+  if (handleActionResult(data, makeActive ? 'تم تفعيل المستخدم' : 'تم تعطيل المستخدم')) loadAdminData();
 }
 
 // Auto-login if a key was already entered this session

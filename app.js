@@ -2,30 +2,88 @@
  * app.js — Public dashboard. READ ONLY. No write calls ever happen here.
  */
 
-let STATE = { records: [], lines: [], workers: [], allWorkers: [], slotConfig: [], downtimeLogs: [], serverTime: null, lastFetch: null };
+let STATE = { records: [], lines: [], workers: [], allWorkers: [], slotConfig: [], downtimeLogs: [], serverTime: null, lastFetch: null, role: null, allowedLines: [], username: '', password: '' };
 let charts = {};
+let POLL_STARTED = false;
 
 const AR_MONTHS_WEEKDAY = { hour12: true };
 
 async function fetchData() {
   try {
-    const res = await fetch(`${CONFIG.API_URL}?action=getData`);
+    const url = `${CONFIG.API_URL}?action=getData&username=${encodeURIComponent(STATE.username)}&password=${encodeURIComponent(STATE.password)}`;
+    const res = await fetch(url);
     const data = await res.json();
-    if (!data.ok) throw new Error(data.error || 'خطأ غير معروف');
+    if (!data.ok) {
+      if (data.error === 'INVALID_LOGIN') { showViewerLogin('اسم المستخدم أو كلمة المرور غير صحيحة'); return; }
+      throw new Error(data.error || 'خطأ غير معروف');
+    }
     STATE.records = data.records;
     STATE.lines = data.lines;
     STATE.workers = data.workers;
     STATE.allWorkers = data.allWorkers || data.workers;
     STATE.downtimeLogs = data.downtimeLogs || [];
     STATE.slotConfig = data.slotConfig.map(s => ({ ...s, slot: String(s.slot) }));
+    STATE.role = data.role;
+    STATE.allowedLines = data.allowedLines || [];
     STATE.serverTime = new Date(data.serverTime);
     STATE.lastFetch = new Date();
+    applyRolePermissions();
     render();
     if (typeof onDataLoaded === 'function') onDataLoaded(); // hook for reports.js (daily/weekly/monthly tabs)
   } catch (err) {
     document.getElementById('statusPill').textContent = 'تعذر الاتصال بالخادم';
     console.error(err);
   }
+}
+
+// ---------- VIEWER LOGIN (public dashboard) ----------
+// A separate credential system from the admin write-password — this only
+// controls what a viewer can SEE. The server (Code.gs doGet) enforces the
+// actual line filtering; what happens here (hiding tabs) is a UX
+// convenience on top of that, not the security boundary itself.
+
+function showViewerLogin(errorMsg) {
+  document.getElementById('dashboardApp').style.display = 'none';
+  document.getElementById('viewerLoginWrap').style.display = 'block';
+  const errBox = document.getElementById('viewerLoginError');
+  if (errorMsg) { errBox.textContent = errorMsg; errBox.style.display = 'block'; }
+  else { errBox.style.display = 'none'; }
+}
+
+function doViewerLogin() {
+  const username = document.getElementById('viewerUsername').value.trim();
+  const password = document.getElementById('viewerPassword').value;
+  if (!username || !password) { showViewerLogin('أدخل اسم المستخدم وكلمة المرور'); return; }
+  STATE.username = username;
+  STATE.password = password;
+  sessionStorage.setItem('viewerUsername', username);
+  sessionStorage.setItem('viewerPassword', password);
+  document.getElementById('viewerLoginWrap').style.display = 'none';
+  document.getElementById('dashboardApp').style.display = 'block';
+  startPollingIfNeeded();
+}
+
+/** Hides tabs a LINE_VIEWER isn't allowed to open — the server already never
+ * sends them other lines' data, so this is a UX layer, not the real boundary. */
+function applyRolePermissions() {
+  const restricted = STATE.role === 'LINE_VIEWER';
+  document.querySelectorAll('#mainTabsBar .tab-btn').forEach(btn => {
+    const isLive = btn.dataset.maintab === 'live';
+    btn.style.display = (restricted && !isLive) ? 'none' : '';
+  });
+  if (restricted) switchMainTab('live');
+}
+
+function startPollingIfNeeded() {
+  if (POLL_STARTED) return;
+  POLL_STARTED = true;
+  fetchData();
+  setInterval(fetchData, CONFIG.REFRESH_INTERVAL_MS);
+  setInterval(() => {
+    if (!STATE.serverTime) return;
+    STATE.serverTime = new Date(STATE.serverTime.getTime() + 1000);
+    document.getElementById('nowTime').textContent = Engine.fmtTime(STATE.serverTime);
+  }, 1000);
 }
 
 function todayStr(now) { return Engine.fmtDate(now); }
@@ -403,17 +461,27 @@ function renderWorkerPerformance(records, containerId) {
  * and, the first time a reporting tab is opened, asks reports.js to draw it.
  */
 function switchMainTab(name) {
+  // A LINE_VIEWER is not allowed to open any tab but Live — enforced here as
+  // a UX guard; the real boundary is that the server never sends them other
+  // lines' data in the first place, regardless of which tab is clicked.
+  if (STATE.role === 'LINE_VIEWER' && name !== 'live') return;
   document.querySelectorAll('.main-tabs .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.maintab === name));
   document.querySelectorAll('.maintab-panel').forEach(p => p.style.display = 'none');
   document.getElementById('maintab-' + name).style.display = 'block';
   if (typeof onMainTabShown === 'function') onMainTabShown(name);
 }
 
-fetchData();
-setInterval(fetchData, CONFIG.REFRESH_INTERVAL_MS);
-// Lightweight per-second clock tick (does not touch charts/tables to avoid flicker)
-setInterval(() => {
-  if (!STATE.serverTime) return;
-  STATE.serverTime = new Date(STATE.serverTime.getTime() + 1000);
-  document.getElementById('nowTime').textContent = Engine.fmtTime(STATE.serverTime);
-}, 1000);
+// Auto-login if credentials were already entered this session (mirrors admin.js's pattern).
+window.addEventListener('load', () => {
+  const savedUser = sessionStorage.getItem('viewerUsername');
+  const savedPass = sessionStorage.getItem('viewerPassword');
+  if (savedUser && savedPass) {
+    STATE.username = savedUser;
+    STATE.password = savedPass;
+    document.getElementById('viewerLoginWrap').style.display = 'none';
+    document.getElementById('dashboardApp').style.display = 'block';
+    startPollingIfNeeded();
+  } else {
+    showViewerLogin();
+  }
+});

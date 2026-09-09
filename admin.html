@@ -36,6 +36,7 @@
       <button class="tab-btn" data-tab="targets" onclick="switchTab('targets')">أهداف الخطوط</button>
       <button class="tab-btn" data-tab="slots" onclick="switchTab('slots')">جدول الفترات</button>
       <button class="tab-btn" data-tab="quality" onclick="switchTab('quality')">جودة البيانات</button>
+      <button class="tab-btn" data-tab="users" onclick="switchTab('users')">المستخدمون</button>
     </div>
 
     <!-- TAB: entry -->
@@ -124,6 +125,28 @@
     <div class="tab-panel" id="tab-quality" style="display:none;">
       <div class="card muted">الفحص يكتشف مؤشرات تحتاج مراجعة فقط؛ لا يحذف أو يصحح أي بيانات تلقائيًا.</div>
       <div class="card" id="dataQualityReport"></div>
+    </div>
+
+    <!-- TAB: users (viewer accounts for the PUBLIC dashboard — separate from the admin write-password) -->
+    <div class="tab-panel" id="tab-users" style="display:none;">
+      <div class="card muted">حسابات مشاهدة الداشبورد العام فقط — لا علاقة لها بكلمة مرور الإدارة (لوحة التحكم دي). "مدير/Admin" يشوف كل الخطوط وكل التبويبات. "مستخدم خط" يشوف تبويب "مباشر" بس وخطوطه المسموح بيها فقط — البيانات بتتفلتر من السيرفر نفسه.</div>
+      <div class="card" id="userFormCard">
+        <div class="field"><label>اسم المستخدم</label><input type="text" id="userUsername" placeholder="مثال: line4_supervisor"></div>
+        <div class="field"><label>كلمة المرور</label><input type="password" id="userPassword" placeholder="اتركه فاضي عند التعديل للإبقاء على نفس الباسورد"></div>
+        <div class="field">
+          <label>الصلاحية</label>
+          <select id="userRole" onchange="toggleUserLinesField()">
+            <option value="LINE_VIEWER">مستخدم خط (Live فقط)</option>
+            <option value="ADMIN">مدير / Management (كل شيء)</option>
+          </select>
+        </div>
+        <div class="field" id="userLinesField">
+          <label>الخطوط المسموح بيها</label>
+          <div id="userLinesCheckboxes" class="muted">سيتم عرض الخطوط المتاحة هنا</div>
+        </div>
+        <button class="btn-primary" onclick="saveUserAccount()">حفظ المستخدم</button>
+      </div>
+      <div class="card" id="usersList" style="padding:0;"></div>
     </div>
 
   </div>
