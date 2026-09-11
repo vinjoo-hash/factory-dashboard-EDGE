@@ -2,22 +2,82 @@
  * app.js — Public dashboard. READ ONLY. No write calls ever happen here.
  */
 
-let STATE = { records: [], lines: [], workers: [], allWorkers: [], slotConfig: [], downtimeLogs: [], serverTime: null, lastFetch: null, role: null, allowedLines: [], username: '', password: '' };
+let STATE = {
+  records: [], lines: [], workers: [], allWorkers: [], slotConfig: [], downtimeLogs: [],
+  serverTime: null, lastFetch: null, role: null, allowedLines: [], username: '', password: '',
+  // PERFORMANCE: tracks which date range of ProductionRecords is currently
+  // loaded in STATE.records, so reports.js can tell whether it needs to
+  // fetch more before rendering an older Daily/Weekly/Monthly period, instead
+  // of the routine poll ever re-downloading the entire history.
+  recordsWindowStart: null, recordsWindowEnd: null,
+};
 let charts = {};
 let POLL_STARTED = false;
 
 const AR_MONTHS_WEEKDAY = { hour12: true };
 
+/** Merges records by recordId (add new, update existing) — never wholesale-
+ * replaces STATE.records, so records loaded earlier via a supplementary
+ * fetch (an older date the admin/viewer navigated to) survive the next
+ * routine poll, which only re-covers the default recent window. */
+function mergeRecordsById(incoming) {
+  const map = new Map(STATE.records.map(r => [r.recordId, r]));
+  incoming.forEach(r => map.set(r.recordId, r));
+  STATE.records = [...map.values()];
+}
+
+function expandRecordsWindow(rangeStart, rangeEnd) {
+  if (rangeStart && (!STATE.recordsWindowStart || rangeStart < STATE.recordsWindowStart)) STATE.recordsWindowStart = rangeStart;
+  if (rangeEnd && (!STATE.recordsWindowEnd || rangeEnd > STATE.recordsWindowEnd)) STATE.recordsWindowEnd = rangeEnd;
+  // A null bound from the server means "unbounded on that side" — treat the
+  // whole history as loaded rather than leaving stale, wrong bounds in place.
+  if (rangeStart === null) STATE.recordsWindowStart = '0000-01-01';
+  if (rangeEnd === null) STATE.recordsWindowEnd = '9999-12-31';
+}
+
+/** True if [start, end] is already fully covered by what's loaded in STATE.records. */
+function isRangeLoaded(start, end) {
+  return STATE.recordsWindowStart !== null && STATE.recordsWindowEnd !== null &&
+    start >= STATE.recordsWindowStart && end <= STATE.recordsWindowEnd;
+}
+
+/**
+ * On-demand supplementary fetch for a date range NOT already covered by the
+ * routine poll's default window — e.g. the Daily tab jumping to a date from
+ * three months ago. Fetches ONLY that range's ProductionRecords (permissions
+ * still enforced server-side exactly as for the routine poll) and merges it
+ * in. Returns a promise so callers can await it before rendering.
+ */
+async function fetchRecordsRange(startDate, endDate) {
+  if (isRangeLoaded(startDate, endDate)) return; // already have it, nothing to do
+  try {
+    const url = `${CONFIG.API_URL}?action=getData&username=${encodeURIComponent(STATE.username)}&password=${encodeURIComponent(STATE.password)}&startDate=${startDate}&endDate=${endDate}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!data.ok) return; // routine poll's own error handling covers auth failures; a supplementary fetch failing silently just means that range stays unloaded, not a crash
+    mergeRecordsById(data.records);
+    expandRecordsWindow(data.recordsRangeStart || startDate, data.recordsRangeEnd || endDate);
+  } catch (err) {
+    console.error('[fetchRecordsRange]', err);
+  }
+}
+
 async function fetchData() {
   try {
-    const url = `${CONFIG.API_URL}?action=getData&username=${encodeURIComponent(STATE.username)}&password=${encodeURIComponent(STATE.password)}`;
+    // Routine poll: bounded to the last CONFIG.RECORDS_DEFAULT_WINDOW_DAYS
+    // days by default — this is the actual fix for downloading the entire
+    // ProductionRecords history every 45 seconds.
+    const today = Engine.fmtDate(new Date());
+    const windowStart = Engine.addDays(today, -(CONFIG.RECORDS_DEFAULT_WINDOW_DAYS || 65));
+    const url = `${CONFIG.API_URL}?action=getData&username=${encodeURIComponent(STATE.username)}&password=${encodeURIComponent(STATE.password)}&startDate=${windowStart}&endDate=${today}`;
     const res = await fetch(url);
     const data = await res.json();
     if (!data.ok) {
       if (data.error === 'INVALID_LOGIN') { showViewerLogin('اسم المستخدم أو كلمة المرور غير صحيحة'); return; }
       throw new Error(data.error || 'خطأ غير معروف');
     }
-    STATE.records = data.records;
+    mergeRecordsById(data.records);
+    expandRecordsWindow(data.recordsRangeStart || windowStart, data.recordsRangeEnd || today);
     STATE.lines = data.lines;
     STATE.workers = data.workers;
     STATE.allWorkers = data.allWorkers || data.workers;

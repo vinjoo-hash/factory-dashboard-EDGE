@@ -59,12 +59,20 @@ function onDataLoaded() {
 // DAILY TAB
 // ==========================================================================
 
-function renderDailyTab() {
+async function renderDailyTab() {
   const input = document.getElementById('dailyDate');
   if (!input.value) input.value = STATE.serverTime ? Engine.fmtDate(STATE.serverTime) : Engine.fmtDate(new Date());
   if (!input.dataset.wired) { input.dataset.wired = '1'; input.addEventListener('change', renderDailyTab); }
 
   const dateStr = input.value;
+  // PERFORMANCE: the routine poll only carries a recent rolling window of
+  // ProductionRecords; jumping to an older date fetches just that day's
+  // records on demand (no-op if it's already within the loaded window).
+  await fetchRecordsRange(dateStr, dateStr);
+  renderDailyTabBody(dateStr);
+}
+
+function renderDailyTabBody(dateStr) {
   const targets = getTargetsForDate(dateStr);
   const lineNames = Object.keys(targets).length ? Object.keys(targets) : Engine.getLineNamesFromData(STATE.records, STATE.lines);
   const day = Engine.computeDaySummary(STATE.records, STATE.lines, dateStr, lineNames);
@@ -108,8 +116,7 @@ function renderDailyTab() {
   const sortedSlots = [...STATE.slotConfig].sort((a, b) => Engine.timeToMinutes(a.start) - Engine.timeToMinutes(b.start));
   document.getElementById('dailySlotTableBody').innerHTML = sortedSlots.map(s => {
     const total = lineNames.reduce((sum, l) => sum + Engine.slotTotal(dayRecords, l, s.slot), 0);
-    const isOT = Engine.getEffectiveSlotType(STATE.slotConfig, dateStr, s.slot) === 'OVERTIME';
-    return `<tr class="${isOT ? 'overtime-slot' : ''}"><td>${s.slot}</td><td>${s.start}–${s.end}</td><td>${isOT ? 'أوفر تايم' : 'عادي'}</td><td>${total || '-'}</td></tr>`;
+    return `<tr class="${s.type === 'OVERTIME' ? 'overtime-slot' : ''}"><td>${s.slot}</td><td>${s.start}–${s.end}</td><td>${s.type === 'OVERTIME' ? 'أوفر تايم' : 'عادي'}</td><td>${total || '-'}</td></tr>`;
   }).join('');
 
   // Line chart: target vs actual
@@ -142,10 +149,16 @@ function goToCurrentWeek() {
   renderWeeklyTab();
 }
 
-function renderWeeklyTab() {
+async function renderWeeklyTab() {
   if (!REPORTS.weekRefDate) REPORTS.weekRefDate = Engine.fmtDate(STATE.serverTime || new Date());
   const weekStart = Engine.getWeekStart(REPORTS.weekRefDate);
   const weekEnd = Engine.addDays(weekStart, 6);
+  const prevStart = Engine.addDays(weekStart, -7); // comparison needs the previous week too
+
+  // PERFORMANCE: fetch the full range this view needs (previous week through
+  // this week) in one go if it isn't already loaded — no-op otherwise.
+  await fetchRecordsRange(prevStart, weekEnd);
+
   const dateList = Engine.getDateRange(weekStart, weekEnd);
   const lineNames = Engine.getLineNamesFromData(STATE.records, STATE.lines);
   const daySummaries = dateList.map(d => Engine.computeDaySummary(STATE.records, STATE.lines, d, lineNames));
@@ -156,7 +169,6 @@ function renderWeeklyTab() {
   renderPeriodKpis('weeklyKpiGrid', summary);
 
   // comparison to previous week
-  const prevStart = Engine.addDays(weekStart, -7);
   const prevDates = Engine.getDateRange(prevStart, Engine.addDays(prevStart, 6));
   const prevSummary = Engine.computePeriodSummary(prevDates.map(d => Engine.computeDaySummary(STATE.records, STATE.lines, d, lineNames)));
   renderComparisonCard('weeklyComparisonCard', summary, prevSummary, 'الأسبوع الماضي');
@@ -189,7 +201,7 @@ function populateMonthlySelectors() {
   yearSelect.addEventListener('change', () => { REPORTS.monthlyYear = Number(yearSelect.value); renderMonthlyTab(); });
 }
 
-function renderMonthlyTab() {
+async function renderMonthlyTab() {
   populateMonthlySelectors();
   const now = STATE.serverTime || new Date();
   if (!REPORTS.monthlyMonth) REPORTS.monthlyMonth = now.getMonth() + 1;
@@ -201,6 +213,18 @@ function renderMonthlyTab() {
   // clamp end to today if this is the current (incomplete) month
   const todayStr = Engine.fmtDate(now);
   const effectiveEnd = end > todayStr ? todayStr : end;
+
+  // previous month's range, computed up front so we can fetch both months in one go
+  const prevMonth = REPORTS.monthlyMonth === 1 ? 12 : REPORTS.monthlyMonth - 1;
+  const prevYear = REPORTS.monthlyMonth === 1 ? REPORTS.monthlyYear - 1 : REPORTS.monthlyYear;
+  const prevRange = Engine.getMonthRange(prevYear, prevMonth);
+
+  // PERFORMANCE: fetch this month + previous month's ProductionRecords in one
+  // request if not already loaded — no-op if the routine poll's rolling
+  // window already covers it (true for the current/recent months; an older
+  // year fetches on demand exactly once, here).
+  await fetchRecordsRange(prevRange.start, effectiveEnd);
+
   const dateList = Engine.getDateRange(start, effectiveEnd > start ? effectiveEnd : start);
   const lineNames = Engine.getLineNamesFromData(STATE.records, STATE.lines);
   const daySummaries = dateList.map(d => Engine.computeDaySummary(STATE.records, STATE.lines, d, lineNames));
@@ -209,9 +233,6 @@ function renderMonthlyTab() {
   renderPeriodKpis('monthlyKpiGrid', summary);
 
   // previous month comparison
-  const prevMonth = REPORTS.monthlyMonth === 1 ? 12 : REPORTS.monthlyMonth - 1;
-  const prevYear = REPORTS.monthlyMonth === 1 ? REPORTS.monthlyYear - 1 : REPORTS.monthlyYear;
-  const prevRange = Engine.getMonthRange(prevYear, prevMonth);
   const prevDates = Engine.getDateRange(prevRange.start, prevRange.end);
   const prevSummary = Engine.computePeriodSummary(prevDates.map(d => Engine.computeDaySummary(STATE.records, STATE.lines, d, lineNames)));
   renderComparisonCard('monthlyComparisonCard', summary, prevSummary, 'الشهر الماضي');

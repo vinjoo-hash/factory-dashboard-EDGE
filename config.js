@@ -40,4 +40,14 @@ const CONFIG = {
   DATA_QUALITY: {
     outlierMultiplier: 3,
   },
+
+  // PERFORMANCE: routine polling (every REFRESH_INTERVAL_MS) only requests
+  // ProductionRecords from the last N days by default, instead of the
+  // entire history — this is the actual fix for the "downloads everything
+  // every refresh" bottleneck. 65 days comfortably covers "this month vs
+  // last month" (Monthly tab) and "this week vs last week" (Weekly tab)
+  // comparisons. Viewing an OLDER date (Daily/Weekly/Monthly tabs) still
+  // works — the frontend fetches just that extra range on demand, once,
+  // the first time you navigate there; it does not re-download everything.
+  RECORDS_DEFAULT_WINDOW_DAYS: 65,
 };

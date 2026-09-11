@@ -3,7 +3,12 @@
  * Nothing here duplicates schedule/calculation logic — that all lives in engine.js.
  */
 
-let ADMIN = { key: '', slotConfig: [], workers: [], allWorkers: [], lines: [], records: [], downtimeLogs: [], users: [] };
+let ADMIN = {
+  key: '', slotConfig: [], workers: [], allWorkers: [], lines: [], records: [], downtimeLogs: [], users: [],
+  // PERFORMANCE: same rolling-window tracking as the public dashboard's STATE
+  // (see app.js) — the admin panel's ProductionRecords load is bounded too.
+  recordsWindowStart: null, recordsWindowEnd: null,
+};
 let rowCounter = 0;
 let EDITING_RECORD_ID = null;
 
@@ -14,6 +19,44 @@ function toast(msg, isError) {
   el.textContent = msg;
   host.appendChild(el);
   setTimeout(() => el.remove(), 2600);
+}
+
+/** Merges records by recordId — never wholesale-replaces ADMIN.records, so a
+ * record loaded via a supplementary fetch (an older date opened in "سجلات
+ * الإنتاج") survives the next loadAdminData() call, which only re-covers the
+ * default recent window. Mirrors app.js's mergeRecordsById for the same reason
+ * (admin.html and index.html are separate pages, sharing no code). */
+function mergeAdminRecordsById(incoming) {
+  const map = new Map(ADMIN.records.map(r => [r.recordId, r]));
+  incoming.forEach(r => map.set(r.recordId, r));
+  ADMIN.records = [...map.values()];
+}
+
+function expandAdminRecordsWindow(rangeStart, rangeEnd) {
+  if (rangeStart && (!ADMIN.recordsWindowStart || rangeStart < ADMIN.recordsWindowStart)) ADMIN.recordsWindowStart = rangeStart;
+  if (rangeEnd && (!ADMIN.recordsWindowEnd || rangeEnd > ADMIN.recordsWindowEnd)) ADMIN.recordsWindowEnd = rangeEnd;
+  if (rangeStart === null) ADMIN.recordsWindowStart = '0000-01-01';
+  if (rangeEnd === null) ADMIN.recordsWindowEnd = '9999-12-31';
+}
+
+function isAdminRangeLoaded(start, end) {
+  return ADMIN.recordsWindowStart !== null && ADMIN.recordsWindowEnd !== null &&
+    start >= ADMIN.recordsWindowStart && end <= ADMIN.recordsWindowEnd;
+}
+
+/** On-demand fetch for a ProductionRecords date range outside the loaded
+ * window — e.g. opening "سجلات الإنتاج" for a date from months ago. */
+async function fetchAdminRecordsRange(startDate, endDate) {
+  if (isAdminRangeLoaded(startDate, endDate)) return;
+  try {
+    const res = await fetch(`${CONFIG.API_URL}?action=getData&adminKey=${encodeURIComponent(ADMIN.key)}&startDate=${startDate}&endDate=${endDate}`);
+    const data = await res.json();
+    if (!data.ok) return;
+    mergeAdminRecordsById(data.records);
+    expandAdminRecordsWindow(data.recordsRangeStart || startDate, data.recordsRangeEnd || endDate);
+  } catch (err) {
+    console.error('[fetchAdminRecordsRange]', err);
+  }
 }
 
 /**
@@ -66,14 +109,20 @@ function doLogin() {
 
 async function loadAdminData() {
   try {
-    const res = await fetch(`${CONFIG.API_URL}?action=getData&adminKey=${encodeURIComponent(ADMIN.key)}`);
+    // PERFORMANCE: bounded default window, same as the public dashboard —
+    // see config.js's RECORDS_DEFAULT_WINDOW_DAYS. Merged in below rather
+    // than replacing, so an older date opened via "سجلات الإنتاج" isn't lost.
+    const today = Engine.fmtDate(new Date());
+    const windowStart = Engine.addDays(today, -(CONFIG.RECORDS_DEFAULT_WINDOW_DAYS || 65));
+    const res = await fetch(`${CONFIG.API_URL}?action=getData&adminKey=${encodeURIComponent(ADMIN.key)}&startDate=${windowStart}&endDate=${today}`);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error);
     ADMIN.slotConfig = data.slotConfig.map(s => ({ ...s, slot: String(s.slot) }));
     ADMIN.workers = data.workers;
     ADMIN.allWorkers = data.allWorkers || data.workers;
     ADMIN.lines = data.lines;
-    ADMIN.records = data.records;
+    mergeAdminRecordsById(data.records);
+    expandAdminRecordsWindow(data.recordsRangeStart || windowStart, data.recordsRangeEnd || today);
     ADMIN.downtimeLogs = data.downtimeLogs || [];
     ADMIN.users = data.users || [];
 
@@ -205,12 +254,16 @@ async function saveProduction() {
 
 // ---------- PRODUCTION RECORDS TAB (view / edit / delete) ----------
 
-function renderRecordsList() {
+async function renderRecordsList() {
   const dateInput = document.getElementById('recordsDate');
   if (!dateInput.value) dateInput.value = Engine.fmtDate(new Date());
   if (!dateInput.dataset.wired) { dateInput.dataset.wired = '1'; dateInput.addEventListener('change', renderRecordsList); }
 
   const date = dateInput.value;
+  // PERFORMANCE: correcting an old record means opening a date outside the
+  // routine load's window — fetch just that day on demand (no-op if already loaded).
+  await fetchAdminRecordsRange(date, date);
+
   const dayRecords = ADMIN.records
     .filter(r => r.date === date)
     .sort((a, b) => String(a.slot).localeCompare(String(b.slot), undefined, { numeric: true }) || a.line.localeCompare(b.line));
