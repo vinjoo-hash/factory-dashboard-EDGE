@@ -353,40 +353,84 @@ const Engine = (function () {
   }
 
   /** Aggregates an array of computeDaySummary() results into period-level KPIs (Req #2, #9). */
+  /**
+   * FRIDAY RECOVERY RULE (single decision point for the whole engine).
+   * Friday is the week's last day and is used to recover the deficit
+   * accumulated by the normal days — it is NOT a normal production day that
+   * adds its own target to a Weekly/Monthly total. So at PERIOD level:
+   *   - Friday's TARGET is excluded (even if manually entered in LinesOrders —
+   *     such an entry is treated as a Recovery Target, informational only).
+   *   - Friday's ACTUAL production is fully counted, reducing the deficit.
+   * computeDaySummary() is deliberately NOT changed: a single day viewed on
+   * its own (Daily tab) still shows exactly what's in the sheet for it.
+   */
+  function isFridayRecoveryDate(dateStr) {
+    return isOvertimeDate(dateStr);
+  }
+
   function computePeriodSummary(daySummaries) {
-    const workingDays = daySummaries.filter(d => d.hasData && d.target > 0);
-    const totalTarget = workingDays.reduce((s, d) => s + d.target, 0);
-    const totalActual = workingDays.reduce((s, d) => s + d.actual, 0);
-    const totalOvertime = workingDays.reduce((s, d) => s + d.overtime, 0);
-    const totalNormal = workingDays.reduce((s, d) => s + d.normal, 0);
+    // Normal (non-Friday) days are the only ones that contribute a TARGET.
+    const normalWorkingDays = daySummaries.filter(d => d.hasData && d.target > 0 && !isFridayRecoveryDate(d.date));
+    // Friday days contribute ACTUAL only. No `target > 0` condition here: a
+    // Friday with production but no manual target must still count its output.
+    const fridayDays = daySummaries.filter(d => d.hasData && isFridayRecoveryDate(d.date));
+
+    const totalTarget = normalWorkingDays.reduce((s, d) => s + d.target, 0);
+    const normalActual = normalWorkingDays.reduce((s, d) => s + d.actual, 0);
+    const fridayActual = fridayDays.reduce((s, d) => s + d.actual, 0);
+    const totalActual = normalActual + fridayActual;
+    const totalOvertime = normalWorkingDays.reduce((s, d) => s + d.overtime, 0) + fridayDays.reduce((s, d) => s + d.overtime, 0);
+    const totalNormal = normalWorkingDays.reduce((s, d) => s + d.normal, 0) + fridayDays.reduce((s, d) => s + d.normal, 0);
+
     const achievement = computeAchievement(totalActual, totalTarget);
     const shortage = computeShortage(achievement);
     const remaining = computeRemaining(totalTarget, totalActual);
-    const daysAchieved = workingDays.filter(d => d.status === 'TARGET_ACHIEVED').length;
-    const daysBehind = workingDays.filter(d => d.status === 'BEHIND').length;
-    const avgDailyProduction = workingDays.length ? totalActual / workingDays.length : 0;
-    const avgDailyAchievement = workingDays.length ? workingDays.reduce((s, d) => s + d.achievement, 0) / workingDays.length : 0;
+    // Day-level judgements (achieved/behind, best/worst, averages) apply to
+    // normal days only — Friday has no target of its own to be judged against.
+    const daysAchieved = normalWorkingDays.filter(d => d.status === 'TARGET_ACHIEVED').length;
+    const daysBehind = normalWorkingDays.filter(d => d.status === 'BEHIND').length;
+    const avgDailyProduction = normalWorkingDays.length ? normalActual / normalWorkingDays.length : 0;
+    const avgDailyAchievement = normalWorkingDays.length ? normalWorkingDays.reduce((s, d) => s + d.achievement, 0) / normalWorkingDays.length : 0;
 
     let bestDay = null, worstDay = null;
-    workingDays.forEach(d => {
+    normalWorkingDays.forEach(d => {
       if (!bestDay || d.achievement > bestDay.achievement) bestDay = d;
       if (!worstDay || d.achievement < worstDay.achievement) worstDay = d;
     });
 
+    // What the system automatically understands Friday's recovery target to
+    // be: the deficit left by the normal days, before Friday's own output is
+    // applied. Informational only — never added to totalTarget.
+    const fridayRecovery = fridayDays.length ? {
+      recoveryTarget: computeRemaining(totalTarget, normalActual),
+      deficitBeforeFriday: computeRemaining(totalTarget, normalActual),
+      fridayActual,
+      deficitAfterFriday: computeRemaining(totalTarget, totalActual),
+    } : null;
+
     return {
       totalTarget, totalActual, totalNormal, totalOvertime, achievement, shortage, remaining,
-      workingDaysCount: workingDays.length, daysAchieved, daysBehind, avgDailyProduction, avgDailyAchievement,
-      bestDay, worstDay, workingDays,
+      workingDaysCount: normalWorkingDays.length, daysAchieved, daysBehind, avgDailyProduction, avgDailyAchievement,
+      bestDay, worstDay, workingDays: normalWorkingDays, fridayRecovery,
     };
   }
 
-  /** Per-line totals across a period, ranked by achievement% (Req #3, #11 — not raw quantity). */
+  /** Per-line totals across a period, ranked by achievement% (Req #3, #11 — not raw quantity).
+   * FRIDAY RECOVERY RULE applies per line too: Friday contributes ACTUAL
+   * (and normal/overtime split) but never TARGET. */
   function computeLinePeriodPerformance(daySummaries, lineNames) {
     const perLine = lineNames.map(line => {
       let target = 0, actual = 0, normal = 0, overtime = 0, otDays = 0, daysWithTarget = 0;
       daySummaries.forEach(d => {
         const lb = d.lineBreakdown.find(x => x.line === line);
-        if (lb && lb.target > 0) {
+        if (!lb) return;
+        if (isFridayRecoveryDate(d.date)) {
+          // Recovery day: count output only, no target, not a "day with target".
+          if (d.hasData) {
+            actual += lb.actual; normal += lb.normal; overtime += lb.overtime;
+            if (lb.usedOvertime) otDays++;
+          }
+        } else if (lb.target > 0) {
           target += lb.target; actual += lb.actual; normal += lb.normal; overtime += lb.overtime; daysWithTarget++;
           if (lb.usedOvertime) otDays++;
         }
@@ -405,18 +449,25 @@ const Engine = (function () {
     return perLine.map(l => ({ ...l, rank: l.daysWithTarget > 0 ? ranked.find(r => r.line === l.line).rank : null }));
   }
 
-  /** Dedicated overtime-dependency analysis (Req #7, #8). */
+  /** Dedicated overtime-dependency analysis (Req #7, #8).
+   * FRIDAY RECOVERY RULE: Friday is overtime *by definition*, so counting it
+   * as a "day that needed overtime" would falsely inflate every dependency
+   * metric. Friday is therefore excluded from the frequency/dependency
+   * counters (daysWithOT, otDays, otFrequencyPct, recovered/insufficient,
+   * totalWorkingDays) while its PRODUCTION still counts toward the totals. */
   function computeOvertimeAnalysis(daySummaries, lineNames) {
-    const workingDays = daySummaries.filter(d => d.hasData && d.target > 0);
-    const totalOvertime = workingDays.reduce((s, d) => s + d.overtime, 0);
-    const totalActual = workingDays.reduce((s, d) => s + d.actual, 0);
-    const daysWithOT = workingDays.filter(d => d.overtime > 0).length;
-    const avgOTPerDay = daysWithOT ? totalOvertime / daysWithOT : 0;
+    const normalWorkingDays = daySummaries.filter(d => d.hasData && d.target > 0 && !isFridayRecoveryDate(d.date));
+    const fridayDays = daySummaries.filter(d => d.hasData && isFridayRecoveryDate(d.date));
+
+    const totalOvertime = normalWorkingDays.reduce((s, d) => s + d.overtime, 0) + fridayDays.reduce((s, d) => s + d.overtime, 0);
+    const totalActual = normalWorkingDays.reduce((s, d) => s + d.actual, 0) + fridayDays.reduce((s, d) => s + d.actual, 0);
+    const daysWithOT = normalWorkingDays.filter(d => d.overtime > 0).length;
+    const avgOTPerDay = daysWithOT ? normalWorkingDays.reduce((s, d) => s + d.overtime, 0) / daysWithOT : 0;
     const otShareOfTotal = totalActual > 0 ? (totalOvertime / totalActual) * 100 : 0;
 
     const perLine = lineNames.map(line => {
       let otDays = 0, otTotal = 0, normalTotal = 0, target = 0, actual = 0, recoveredDays = 0, insufficientDays = 0, daysWithTarget = 0;
-      workingDays.forEach(d => {
+      normalWorkingDays.forEach(d => {
         const lb = d.lineBreakdown.find(x => x.line === line);
         if (lb && lb.target > 0) {
           daysWithTarget++;
@@ -427,6 +478,12 @@ const Engine = (function () {
           }
         }
       });
+      // Friday output is added to the line's actual/overtime totals, but never
+      // to its target or to any dependency counter.
+      fridayDays.forEach(d => {
+        const lb = d.lineBreakdown.find(x => x.line === line);
+        if (lb) { actual += lb.actual; normalTotal += lb.normal; otTotal += lb.overtime; }
+      });
       return {
         line, otDays, otTotal, normalTotal, target, actual,
         achievement: computeAchievement(actual, target), recoveredDays, insufficientDays, daysWithTarget,
@@ -434,7 +491,7 @@ const Engine = (function () {
       };
     });
 
-    return { totalOvertime, daysWithOT, avgOTPerDay, otShareOfTotal, perLine, totalWorkingDays: workingDays.length };
+    return { totalOvertime, daysWithOT, avgOTPerDay, otShareOfTotal, perLine, totalWorkingDays: normalWorkingDays.length };
   }
 
   /**
@@ -689,7 +746,7 @@ const Engine = (function () {
   }
 
   return {
-    getStatus, totalMinutesOfType, elapsedMinutesOfType, isOvertimeDate, getEffectiveSlotType,
+    getStatus, totalMinutesOfType, elapsedMinutesOfType, isOvertimeDate, getEffectiveSlotType, isFridayRecoveryDate,
     computeAchievement, computeShortage, computeRemaining, computeExpected, elapsedGraceAdjustedMinutes,
     computeOvertimeMetrics, estimateCompletion,
     filterByDate, lineTotal, slotTotal, workerTotal, workerLines, factoryTotal,
