@@ -70,7 +70,10 @@ async function fetchAdminRecordsRange(startDate, endDate) {
  */
 async function postAction(action, payload, timeoutMs) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs || 15000);
+  // 25s (not 15s): Apps Script cold-starts plus mobile-network latency can
+  // legitimately exceed 15s — this was causing real "انتهت المهلة" timeouts
+  // on phones even when the save would have succeeded if given more time.
+  const timer = setTimeout(() => controller.abort(), timeoutMs || 25000);
   try {
     const res = await fetch(CONFIG.API_URL, {
       method: 'POST',
